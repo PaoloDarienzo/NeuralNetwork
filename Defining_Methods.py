@@ -185,6 +185,158 @@ def get_dataset_crop(db, _batch_size, _dim1, _dim2, drive):
   numpy_arrays = (train_obf, test_obf, validation_obf)
   return sets_and_labels, numpy_arrays, label_encoder, n_classes
 
+def get_dataset_crop_v2(db, _batch_size, _dim1, _dim2, n_features, drive):
+
+  if db == '9k':
+    #%cd /content
+    os.chdir("/content")
+    downloaded = drive.CreateFile({'id':"1nderD97u_2d1I6TE3ey8wBtEWqLAosk4"})
+    downloaded.GetContentFile('data_9400_88.zip')
+    #!rm -rf DB_Repo
+    getoutput("rm -rf DB_Repo")
+    #!unzip -q data_9400_88.zip -d DB_Repo/
+    getoutput("unzip -q data_9400_88.zip -d DB_Repo/")
+
+  elif db == '14k':
+    #%cd /content
+    os.chdir("/content")
+    downloaded = drive.CreateFile({'id':"1z5J7XE_KJYzZGJd-NHX8PUggED2ZK8HG"})
+    downloaded.GetContentFile('data.zip')
+    #!rm -rf DB_Repo
+    getoutput("rm -rf DB_Repo")
+    #!unzip -q data.zip -d DB_Repo/
+    getoutput("unzip -q data.zip -d DB_Repo/")
+
+  elif db == '18k':
+    #%cd /content
+    os.chdir("/content")
+    downloaded = drive.CreateFile({'id':"18ESID3MpwG-SzZPE1EENzsGPh8vl8ti9"})
+    downloaded.GetContentFile('data_18800.zip')
+    #!rm -rf DB_Repo
+    getoutput("rm -rf DB_Repo")
+    #!unzip -q data_18800.zip -d DB_Repo/
+    getoutput("unzip -q data_18800.zip -d DB_Repo/")
+
+  else:
+    raise ValueError("Keyword for database not recognized; use '9k', '14k' or '18k'.")
+  
+  path, dirs, files = next(os.walk("/content/DB_Repo/data"))
+  file_count = len(files)
+  print(file_count)
+  #%cd /content/DB_Repo/data
+  os.chdir("/content/DB_Repo/data")
+
+  ##PARAMETERS
+
+  dim1 = _dim1
+  dim2 = _dim2
+
+  total_pixels = dim1 * dim2
+  MAX_LEN = 64 #fisso
+
+  #Considero il primo 20% della lista di dati come test set
+  test_percentage = 20 #%
+  #Considero il 20% della lista di dati - esclusi i dati di test - come validation set
+  validation_percentage = 20 #%
+
+  #COSTANTI E DICHIARAZIONI
+
+  database_list = list()
+  labels_list = list()
+  obf_list = list()
+
+  #LETTURA E RESIZE IMMAGINI
+
+  print("START IMAGE INPUT")
+  #Aggiungo i valori alle liste leggendo i vari files
+  for filename in glob.glob('*.npy'):
+    temp_img = np.load(filename)
+    temp_img = temp_img.reshape((-1, MAX_LEN)).astype(np.uint16)
+    #flattening
+    temp_img = temp_img.flatten()
+    dimensione = temp_img.size
+
+    #padding fino alla dimensione dim1xdim2
+    #o crop fino a dim1xdim2 pixels
+    if dimensione < total_pixels:
+      temp_img = np.pad(temp_img, (0, total_pixels - dimensione), mode='constant',constant_values=0)
+    elif dimensione >= total_pixels:
+      temp_img = temp_img[0:total_pixels]
+    else:
+      raise ValueError("Error in reading images.")
+
+    #temp_img = temp_img.reshape((dim1, dim2))
+    temp_img = temp_img.reshape((-1, n_features))
+    database_list.append(temp_img)
+    #Salvo la label, ossia la classe
+    labels_list.append(extract_label(filename))
+    #Salvo la lista di offuscatori di ogni file
+    obf_list.append(extract_obf(filename))
+  print("END IMAGE INPUT")
+
+  #SHUFFLE
+
+  #Ho i valori e le etichette in due liste (+ obf); 
+  #le mescolo mantenendo l'ordine tra valore-label
+  temp = list(zip(database_list, labels_list, obf_list))
+  np.random.shuffle(temp)
+  database_list, labels_list, obf_list = zip(*temp)
+
+  #SUDDIVISIONE DATI
+  #Suddivido in training set, test set e validation test
+  assert len(database_list) == len(labels_list) == len(obf_list)
+  #print(len(database_list))
+
+  #Split per creare test set
+  index_to_split = math.ceil((len(database_list) * test_percentage) / 100)
+  indices = [(0, index_to_split - 1), (index_to_split, len(database_list) - 1)]
+
+  test_list, training_list = [database_list[s:e+1] for s,e in indices]
+  labels_test_list, labels_training_list = [labels_list[s:e+1] for s,e in indices]
+  obf_test_list, obf_training_list = [obf_list[s:e+1] for s,e in indices]
+
+  #Split per creare validation set
+  index_to_split = math.ceil((len(training_list) * validation_percentage) / 100)
+  indices = [(0, index_to_split - 1), (index_to_split, len(training_list) - 1)]
+
+  validation_list, training_list = [training_list[s:e+1] for s,e in indices]
+  labels_validation_list, labels_training_list = [labels_training_list[s:e+1] for s,e in indices]
+  obf_validation_list, obf_training_list = [obf_training_list[s:e+1] for s,e in indices]
+
+  #Trasformo i valori in numpy.ndarray
+  train_images = np.array(training_list)
+  test_images = np.array(test_list)
+  validation_images = np.array(validation_list)
+
+  train_labels = np.array(labels_training_list)
+  test_labels = np.array(labels_test_list)
+  validation_labels = np.array(labels_validation_list)
+
+  train_obf = np.array(obf_training_list)
+  test_obf = np.array(obf_test_list)
+  validation_obf = np.array(obf_validation_list)
+
+  #Encoding delle labels;
+  #Se nella suddivisione il 100% di una classe è fuori dal train_labels,
+  #Vi sarà un errore nell'encoding delle labels negli altri set.
+  label_encoder = LabelEncoder()
+  label_encoder.fit(train_labels)
+  train_labels_encoded = label_encoder.transform(train_labels)
+  test_labels_encoded = label_encoder.transform(test_labels)
+  validation_labels_encoded = label_encoder.transform(validation_labels)
+
+  #Normalizzazione valori in range 0-1
+  train_images = train_images / 65535.0
+  test_images = test_images / 65535.0
+  validation_images = validation_images / 65535.0
+
+  #Dichiarazione altri parametri
+  n_classes = len(list(label_encoder.classes_))
+
+  sets_and_labels = (train_images, train_labels_encoded, test_images, test_labels_encoded, validation_images, validation_labels_encoded)
+  numpy_arrays = (train_obf, test_obf, validation_obf)
+  return sets_and_labels, numpy_arrays, label_encoder, n_classes
+
 #NB: cv2 inverts rows and cols wrt numpy
 def get_dataset_interp(db, _batch_size, _dim1, _dim2, drive):
 
